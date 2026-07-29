@@ -2,18 +2,23 @@ package com.example.ulyssespact
 
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
+import android.widget.Space
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -31,6 +36,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
+import androidx.core.net.toUri
 
 class MainActivity: ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -54,14 +60,18 @@ fun MainScreen() {
     val ctx = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
 
-    var isServiceEnabled by remember {
+    var isAccessibilityGranted by remember {
         mutableStateOf(isAccessibilityEnabled(ctx))
+    }
+    var isOverlayGranted by remember {
+        mutableStateOf(Settings.canDrawOverlays(ctx))
     }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                isServiceEnabled = isAccessibilityEnabled(ctx)
+                isAccessibilityGranted = isAccessibilityEnabled(ctx)
+                isOverlayGranted = Settings.canDrawOverlays(ctx)
             }
         }
 
@@ -83,30 +93,63 @@ fun MainScreen() {
             text = "Pact",
             style = MaterialTheme.typography.headlineLarge
         )
-        Spacer(modifier = Modifier.height(16.dp))
-        if (isServiceEnabled) {
-            Text(
-                text = "Accessibility Activated, App is ready to use",
-                textAlign = TextAlign.Center,
-                color = MaterialTheme.colorScheme.primary
+        Spacer(modifier = Modifier.height(32.dp))
+        if (!isAccessibilityGranted) {
+            PermissionCard(
+                title = "Accessibility Permission",
+                description = "Pact needs this permission to detect when you open a blocked app.",
+                buttonText = "Open Accessibility Settings",
+                onClick = {
+                    ctx.startActivity(
+                        Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
+                    )
+                }
+            )
+        } else if (!isOverlayGranted){
+            PermissionCard(
+                title = "Permissions for Overlay App",
+                description = "Pact needs this permission to display a blocker screen when your time runs out.",
+                buttonText = "Grant Overlay Permission",
+                onClick = {
+                    ctx.startActivity(
+                        Intent(
+                            Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                            "package:${ctx.packageName}".toUri()
+                        )
+                    )
+                }
             )
         } else {
             Text(
-                text = "The app requires Accessibility permission so it can detect when you open other apps.",
+                text = "All of the app required permission is granted so it can detect when you open other apps.",
                 textAlign = TextAlign.Center
             )
-            Spacer(modifier = Modifier.height(24.dp))
-            Button(
-                onClick = {
-                    val intent = Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)
-                    ctx.startActivity(intent)
-                }
-            ) {
-                Text("Give Permission")
-            }
         }
     }
 
+}
+
+@Composable
+fun PermissionCard(title: String, description: String, buttonText: String, onClick: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
+    ) {
+        Column(
+            modifier = Modifier.padding(16.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(text = title, style = MaterialTheme.typography.titleMedium)
+            Spacer(modifier = Modifier.height(8.dp))
+            Text(text = description, textAlign = TextAlign.Center, style = MaterialTheme.typography.bodyMedium)
+            Spacer(modifier = Modifier.height(16.dp))
+            Button(
+                onClick = onClick
+            ) {
+                Text(buttonText)
+            }
+        }
+    }
 }
 
 
