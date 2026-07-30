@@ -1,26 +1,32 @@
 package com.example.ulyssespact
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.net.Uri
+import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
-import android.widget.Space
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -66,6 +72,8 @@ fun MainScreen() {
     var isOverlayGranted by remember {
         mutableStateOf(Settings.canDrawOverlays(ctx))
     }
+
+    val installedApps = remember { getInstalledApps(ctx) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -121,9 +129,18 @@ fun MainScreen() {
             )
         } else {
             Text(
-                text = "All of the app required permission is granted so it can detect when you open other apps.",
-                textAlign = TextAlign.Center
+                text = "Pick App to Block",
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.padding(bottom = 16.dp)
             )
+
+            LazyColumn(
+                modifier = Modifier.weight(1f)
+            ) {
+                items(installedApps) {
+                    app -> AppListItem(app = app)
+                }
+            }
         }
     }
 
@@ -170,4 +187,61 @@ fun isAccessibilityEnabled(context: Context): Boolean {
         }
     }
     return false
+}
+
+
+data class AppInfo(val appName: String, val packageName: String)
+
+@SuppressLint("QueryPermissionsNeeded")
+fun getInstalledApps(ctx: Context): List<AppInfo> {
+    val pm = ctx.packageManager
+
+    val intent = Intent(Intent.ACTION_MAIN, null).apply {
+        addCategory(Intent.CATEGORY_LAUNCHER)
+    }
+
+    val resolveInfos = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        pm.queryIntentActivities(intent, PackageManager.ResolveInfoFlags.of(0L))
+    } else {
+        pm.queryIntentActivities(intent, 0)
+//        pm.getInstalledApplications(0)
+    }
+
+    return resolveInfos.mapNotNull { resolveInfo ->
+        val appName = resolveInfo.loadLabel(pm).toString()
+        val packageName =resolveInfo.activityInfo.packageName
+
+        if (packageName == ctx.packageName) {
+            null
+        } else {
+            AppInfo(appName, packageName)
+        }
+    }.distinctBy { it.packageName }
+        .sortedBy { it.appName }
+}
+
+@Composable
+fun AppListItem(app: AppInfo) {
+    var isChecked by remember {
+        mutableStateOf(false)
+    }
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Column(
+            modifier = Modifier.weight(1f)
+        ) {
+            Text(text = app.appName, style = MaterialTheme.typography.titleMedium)
+            Text(text = app.packageName, style = MaterialTheme.typography.bodySmall)
+        }
+        Switch(
+            checked = isChecked,
+            onCheckedChange = { isChecked = it }
+        )
+    }
 }
