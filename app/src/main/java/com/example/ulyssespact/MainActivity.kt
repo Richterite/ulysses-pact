@@ -10,6 +10,7 @@ import android.provider.Settings
 import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -20,6 +21,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -27,11 +29,15 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,7 +48,14 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.core.net.toUri
-import androidx.core.content.edit
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.longPreferencesKey
+import androidx.datastore.preferences.core.stringSetPreferencesKey
+import androidx.datastore.preferences.preferencesDataStore
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 
 class MainActivity: ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -73,11 +86,7 @@ fun MainScreen() {
         mutableStateOf(Settings.canDrawOverlays(ctx))
     }
 
-    var blockedAppsSet by remember {
-        mutableStateOf(BlockListManager.getBlockedApps(ctx))
-    }
 
-    val installedApps = remember { getInstalledApps(ctx) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -132,6 +141,14 @@ fun MainScreen() {
                 }
             )
         } else {
+            var refreshTrigger by remember {
+                mutableIntStateOf(0)
+            }
+
+            val coroutineScope = rememberCoroutineScope()
+
+            val installedApps = remember { getInstalledApps(ctx) }
+
             Text(
                 text = "Pick App to Block",
                 style = MaterialTheme.typography.titleLarge,
@@ -142,12 +159,22 @@ fun MainScreen() {
                 modifier = Modifier.weight(1f)
             ) {
                 items(installedApps) { app ->
+                    var currentlyBlocked by remember {
+                        mutableStateOf(false)
+                    }
+
+                    LaunchedEffect(key1 = refreshTrigger, key2 = app.packageName) {
+                        currentlyBlocked = BlockListManager.isCurrentlyBlocked(ctx, app.packageName)
+                    }
+
                     AppListItem(
                         app = app,
-                        isBlocked = blockedAppsSet.contains(app.packageName),
-                        onToggle = { isBlocked ->
-                            BlockListManager.updateBlockList(ctx, app.packageName, isBlocked)
-                            blockedAppsSet = BlockListManager.getBlockedApps(ctx)
+                        isBlocked = currentlyBlocked,
+                        onSetTimer = { durationMinutes ->
+                            coroutineScope.launch {
+                                BlockListManager.setBlockTimer(ctx, app.packageName, durationMinutes)
+                                refreshTrigger++
+                            }
                         }
                     )
                 }
@@ -232,11 +259,17 @@ fun getInstalledApps(ctx: Context): List<AppInfo> {
 }
 
 @Composable
-fun AppListItem(app: AppInfo, isBlocked: Boolean, onToggle: (Boolean) -> Unit) {
+fun AppListItem(app: AppInfo, isBlocked: Boolean, onSetTimer: (Int) -> Unit) {
+    var showDialog by remember {
+        mutableStateOf(false)
+    }
 
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .clickable {
+                if(!isBlocked) showDialog = true
+            }
             .padding(vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -249,34 +282,83 @@ fun AppListItem(app: AppInfo, isBlocked: Boolean, onToggle: (Boolean) -> Unit) {
         }
         Switch(
             checked = isBlocked,
-            onCheckedChange = { newValue ->
-                onToggle(newValue)
+            onCheckedChange = {
+                if (!isBlocked) showDialog = true
+            },
+            enabled = !isBlocked
+        )
+    }
+
+    if (showDialog) {
+        AlertDialog(
+            onDismissRequest = { showDialog = false },
+            title = { Text("Pact: Block ${app.appName}") },
+            text = { Text("How long do you want to lock this app?") },
+            confirmButton = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { onSetTimer(15); showDialog = false }
+                    ) { Text("15 Minutes") }
+                    Button(
+                        modifier = Modifier.fillMaxWidth(),
+                        onClick = { onSetTimer(60); showDialog = false }
+                    ) { Text("1 Hour") }
+
+                    TextButton(
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                        onClick = { showDialog = false }
+                    ) { Text("Cancel") }
+                }
             }
         )
     }
 }
 
-
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "pact_prefs")
 object BlockListManager {
-    private const val PREFS_NAME = "PactPrefs"
-    private const val KEY_BLOCKED_APPS = "blocked_apps_set"
+    private val KEY_BLOCKED_APPS = stringSetPreferencesKey("blocked_apps_set")
 
-    fun getBlockedApps(ctx: Context): Set<String> {
-        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        return prefs.getStringSet(KEY_BLOCKED_APPS, emptySet()) ?: emptySet()
+    suspend fun setBlockTimer(ctx: Context, packageName: String, durationMinutes: Int) {
+        val endTime = System.currentTimeMillis() + (durationMinutes * 60 * 1000L)
+        val timeKey = longPreferencesKey("endtime_$packageName")
+
+        // Add endtime based on its package name
+        ctx.dataStore.edit { preferences ->
+            val currentSet = preferences[KEY_BLOCKED_APPS]?.toMutableSet() ?: mutableSetOf()
+            currentSet.add(packageName)
+
+            preferences[KEY_BLOCKED_APPS] = currentSet
+            preferences[timeKey] = endTime
+        }
     }
 
-    fun updateBlockList(ctx: Context, packageName: String, isBlocked: Boolean) {
-        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-        val currentSet =
-            prefs.getStringSet(KEY_BLOCKED_APPS, emptySet())?.toMutableSet() ?: mutableSetOf()
-
-        if (isBlocked) {
-            currentSet.add(packageName)
-        } else {
-            currentSet.remove(packageName)
+    suspend fun isCurrentlyBlocked(ctx: Context, packageName: String): Boolean {
+        val preferences = ctx.dataStore.data.first()
+        // Check if exist in Blocked Set
+        if (preferences[KEY_BLOCKED_APPS]?.contains(packageName) != true) {
+            return false
         }
 
-        prefs.edit { putStringSet(KEY_BLOCKED_APPS, currentSet) }
+        val timeKey = longPreferencesKey("endtime_$packageName")
+        val endTime = preferences[timeKey] ?: 0L
+        val isStillBlocked = System.currentTimeMillis() < endTime
+
+        if (!isStillBlocked && endTime > 0L) {
+            unblockApp(ctx, packageName)
+        }
+
+        return  isStillBlocked
+    }
+
+    suspend fun unblockApp(ctx: Context, packageName: String) {
+        val timeKey = longPreferencesKey("endtime_$packageName")
+
+        ctx.dataStore.edit { preferences ->
+            val currentSet = preferences[KEY_BLOCKED_APPS]?.toMutableSet() ?: mutableSetOf()
+            currentSet.remove(packageName)
+            preferences[KEY_BLOCKED_APPS] = currentSet
+            preferences.remove(timeKey)
+        }
     }
 }

@@ -15,6 +15,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.core.graphics.toColorInt
+import kotlinx.coroutines.runBlocking
 
 class PactAccessibilityService : AccessibilityService() {
     private lateinit var windowManager: WindowManager
@@ -44,13 +45,17 @@ class PactAccessibilityService : AccessibilityService() {
                 Log.d("PactService", "Class Name: $className")
             }
 
-            if (packageName == this.packageName) {
+            if (packageName == this.packageName ||
+                packageName == null ||
+                packageName == "com.android.systemui") {
                 return
             }
 
-            val dynamicBlockedAppsList = BlockListManager.getBlockedApps(this)
+            val isBlocked = runBlocking {
+                BlockListManager.isCurrentlyBlocked(this@PactAccessibilityService, packageName)
+            }
 
-            if (dynamicBlockedAppsList.contains(packageName)) {
+            if (isBlocked) {
                 showOverlay()
             } else {
                 removeOverlay()
@@ -81,6 +86,7 @@ class PactAccessibilityService : AccessibilityService() {
             val homeButton = Button(this@PactAccessibilityService).apply {
                 text = "Close and back to Home"
                 setOnClickListener {
+                    removeOverlay()
                     val homeIntent = Intent(
                         Intent.ACTION_MAIN
                     ).apply {
