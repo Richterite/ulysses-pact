@@ -20,10 +20,10 @@ class PactAccessibilityService : AccessibilityService() {
     private lateinit var windowManager: WindowManager
     private var overlayView: LinearLayout? = null
 
-    private val blockedApps = listOf(
-        "com.android.chrome",
-        "com.google.android.youtube"
-    )
+//    private val blockedApps = listOf(
+//        "com.android.chrome",
+//        "com.google.android.youtube"
+//    )
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -48,7 +48,9 @@ class PactAccessibilityService : AccessibilityService() {
                 return
             }
 
-            if (blockedApps.contains(packageName)) {
+            val dynamicBlockedAppsList = BlockListManager.getBlockedApps(this)
+
+            if (dynamicBlockedAppsList.contains(packageName)) {
                 showOverlay()
             } else {
                 removeOverlay()

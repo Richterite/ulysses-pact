@@ -3,7 +3,6 @@ package com.example.ulyssespact
 import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
-import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -43,6 +42,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.core.net.toUri
+import androidx.core.content.edit
 
 class MainActivity: ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -71,6 +71,10 @@ fun MainScreen() {
     }
     var isOverlayGranted by remember {
         mutableStateOf(Settings.canDrawOverlays(ctx))
+    }
+
+    var blockedAppsSet by remember {
+        mutableStateOf(BlockListManager.getBlockedApps(ctx))
     }
 
     val installedApps = remember { getInstalledApps(ctx) }
@@ -137,8 +141,15 @@ fun MainScreen() {
             LazyColumn(
                 modifier = Modifier.weight(1f)
             ) {
-                items(installedApps) {
-                    app -> AppListItem(app = app)
+                items(installedApps) { app ->
+                    AppListItem(
+                        app = app,
+                        isBlocked = blockedAppsSet.contains(app.packageName),
+                        onToggle = { isBlocked ->
+                            BlockListManager.updateBlockList(ctx, app.packageName, isBlocked)
+                            blockedAppsSet = BlockListManager.getBlockedApps(ctx)
+                        }
+                    )
                 }
             }
         }
@@ -221,10 +232,7 @@ fun getInstalledApps(ctx: Context): List<AppInfo> {
 }
 
 @Composable
-fun AppListItem(app: AppInfo) {
-    var isChecked by remember {
-        mutableStateOf(false)
-    }
+fun AppListItem(app: AppInfo, isBlocked: Boolean, onToggle: (Boolean) -> Unit) {
 
     Row(
         modifier = Modifier
@@ -240,8 +248,35 @@ fun AppListItem(app: AppInfo) {
             Text(text = app.packageName, style = MaterialTheme.typography.bodySmall)
         }
         Switch(
-            checked = isChecked,
-            onCheckedChange = { isChecked = it }
+            checked = isBlocked,
+            onCheckedChange = { newValue ->
+                onToggle(newValue)
+            }
         )
+    }
+}
+
+
+object BlockListManager {
+    private const val PREFS_NAME = "PactPrefs"
+    private const val KEY_BLOCKED_APPS = "blocked_apps_set"
+
+    fun getBlockedApps(ctx: Context): Set<String> {
+        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        return prefs.getStringSet(KEY_BLOCKED_APPS, emptySet()) ?: emptySet()
+    }
+
+    fun updateBlockList(ctx: Context, packageName: String, isBlocked: Boolean) {
+        val prefs = ctx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val currentSet =
+            prefs.getStringSet(KEY_BLOCKED_APPS, emptySet())?.toMutableSet() ?: mutableSetOf()
+
+        if (isBlocked) {
+            currentSet.add(packageName)
+        } else {
+            currentSet.remove(packageName)
+        }
+
+        prefs.edit { putStringSet(KEY_BLOCKED_APPS, currentSet) }
     }
 }
