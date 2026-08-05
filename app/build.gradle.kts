@@ -50,6 +50,8 @@ dependencies {
 
 
     val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
+    val lifecycleVersion = "2.11.0"
+
     implementation(composeBom)
 
     implementation("androidx.compose.ui:ui")
@@ -62,4 +64,7 @@ dependencies {
     // data store
     implementation("androidx.datastore:datastore-preferences:1.2.1")
 
+    // lifecycle
+    implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${lifecycleVersion}")
+    implementation("androidx.lifecycle:lifecycle-runtime-compose:${lifecycleVersion}")
 }
