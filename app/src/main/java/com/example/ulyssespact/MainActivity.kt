@@ -66,6 +66,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
+import com.example.ulyssespact.model.AppInfo
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import java.text.SimpleDateFormat
@@ -246,17 +247,7 @@ fun isAccessibilityEnabled(context: Context): Boolean {
 }
 
 
-data class AppInfo(
-    val appName: String,
-    val packageName: String,
-    val isTracked: Boolean = false,
-    val dailyLimitMillis: Long = 0L,
-    val usedTimeMillis: Long = 0L,
-    val lockType: String = "STANDARD"
-) {
-    val isQuotaExceeded: Boolean
-        get() = isTracked && usedTimeMillis >= dailyLimitMillis
-}
+
 
 @SuppressLint("QueryPermissionsNeeded")
 fun getInstalledApps(ctx: Context): List<AppInfo> {
