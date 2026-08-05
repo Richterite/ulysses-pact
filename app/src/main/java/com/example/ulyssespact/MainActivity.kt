@@ -10,6 +10,7 @@ import android.provider.Settings
 import android.text.TextUtils
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -21,19 +22,29 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExposedDropdownMenuBox
+import androidx.compose.material3.ExposedDropdownMenuDefaults
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -50,12 +61,16 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.core.net.toUri
 import androidx.datastore.core.DataStore
 import androidx.datastore.preferences.core.Preferences
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
-import androidx.datastore.preferences.core.stringSetPreferencesKey
+import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 
 class MainActivity: ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -159,20 +174,23 @@ fun MainScreen() {
                 modifier = Modifier.weight(1f)
             ) {
                 items(installedApps) { app ->
-                    var currentlyBlocked by remember {
-                        mutableStateOf(false)
-                    }
+                    var currentAppInfo by remember { mutableStateOf(app) }
 
                     LaunchedEffect(key1 = refreshTrigger, key2 = app.packageName) {
-                        currentlyBlocked = BlockListManager.isCurrentlyBlocked(ctx, app.packageName)
+                        currentAppInfo = BlockListManager.getAppQuotaInfo(ctx, app)
                     }
 
                     AppListItem(
                         app = app,
-                        isBlocked = currentlyBlocked,
-                        onSetTimer = { durationMinutes ->
+                        onSaveConfig = { isTracked, limitMinutes, lockType ->
                             coroutineScope.launch {
-                                BlockListManager.setBlockTimer(ctx, app.packageName, durationMinutes)
+                                BlockListManager.saveAppConfig(
+                                    ctx,
+                                    app.packageName,
+                                    isTracked,
+                                    limitMinutes,
+                                    lockType
+                                )
                                 refreshTrigger++
                             }
                         }
@@ -228,7 +246,17 @@ fun isAccessibilityEnabled(context: Context): Boolean {
 }
 
 
-data class AppInfo(val appName: String, val packageName: String)
+data class AppInfo(
+    val appName: String,
+    val packageName: String,
+    val isTracked: Boolean = false,
+    val dailyLimitMillis: Long = 0L,
+    val usedTimeMillis: Long = 0L,
+    val lockType: String = "STANDARD"
+) {
+    val isQuotaExceeded: Boolean
+        get() = isTracked && usedTimeMillis >= dailyLimitMillis
+}
 
 @SuppressLint("QueryPermissionsNeeded")
 fun getInstalledApps(ctx: Context): List<AppInfo> {
@@ -258,107 +286,212 @@ fun getInstalledApps(ctx: Context): List<AppInfo> {
         .sortedBy { it.appName }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun AppListItem(app: AppInfo, isBlocked: Boolean, onSetTimer: (Int) -> Unit) {
-    var showDialog by remember {
-        mutableStateOf(false)
-    }
+fun AppListItem(
+    app: AppInfo,
+    onSaveConfig: (Boolean, Int, String) -> Unit) {
+    var isExpanded by remember { mutableStateOf(false) }
 
-    Row(
+    var isTracked by remember { mutableStateOf(app.isTracked)}
+    var limitMinutes by remember {
+        mutableFloatStateOf((app.dailyLimitMillis / (60 * 1000L))
+        .coerceAtLeast(15L)
+        .toFloat())
+    }
+    var lockType by remember { mutableStateOf(app.lockType) }
+
+    // key Type
+    val lockOption = listOf("STANDARD", "COGNITIVE", "ULYSSES")
+    val lockDisplayNames = mapOf(
+        "STANDARD" to "Standard (10 seconds pause)",
+        "COGNITIVE" to "Cognitive Obstacles (Typing Text)",
+        "ULYSSES" to "Ulysses Pact (Friend Code)"
+    )
+
+    Card(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                if(!isBlocked) showDialog = true
-            }
-            .padding(vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
     ) {
         Column(
-            modifier = Modifier.weight(1f)
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text(text = app.appName, style = MaterialTheme.typography.titleMedium)
-            Text(text = app.packageName, style = MaterialTheme.typography.bodySmall)
-        }
-        Switch(
-            checked = isBlocked,
-            onCheckedChange = {
-                if (!isBlocked) showDialog = true
-            },
-            enabled = !isBlocked
-        )
-    }
+            // Header
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { isExpanded = !isExpanded }
+                    .padding(16.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = app.appName, style = MaterialTheme.typography.titleMedium)
+                    if (app.isTracked) {
+                        Text(
+                            text = "${app.usedTimeMillis / 60000}m/ ${app.dailyLimitMillis / 60000}m",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary
+                        )
+                    } else {
+                        Text(text = "Not limited", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+                Switch(
+                    checked = isTracked,
+                    onCheckedChange = { checked ->
+                        isTracked = checked
+                        isExpanded = true // open menu automatically
+                    }
+                )
 
-    if (showDialog) {
-        AlertDialog(
-            onDismissRequest = { showDialog = false },
-            title = { Text("Pact: Block ${app.appName}") },
-            text = { Text("How long do you want to lock this app?") },
-            confirmButton = {
-                Column(modifier = Modifier.fillMaxWidth()) {
-                    Button(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { onSetTimer(15); showDialog = false }
-                    ) { Text("15 Minutes") }
-                    Button(
-                        modifier = Modifier.fillMaxWidth(),
-                        onClick = { onSetTimer(60); showDialog = false }
-                    ) { Text("1 Hour") }
+                Icon(
+                    imageVector = if (isExpanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                    contentDescription = "Expand",
+                    modifier = Modifier.padding(start = 8.dp)
+                )
+            }
 
-                    TextButton(
-                        modifier = Modifier.align(Alignment.CenterHorizontally),
-                        onClick = { showDialog = false }
-                    ) { Text("Cancel") }
+            AnimatedVisibility(visible = isExpanded) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    // Slider
+                    Text("Daily Time Allowance", style = MaterialTheme.typography.labelSmall)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Slider(
+                            value = limitMinutes,
+                            onValueChange = { limitMinutes = it},
+                            valueRange = 3f..300f, // for debug purpose the limit lowered to 3 seconds
+                            steps = 18,
+                            modifier = Modifier.weight(1f)
+                        )
+                        Text(
+                            text = "${limitMinutes.toInt()}m",
+                            modifier = Modifier.padding(start = 16.dp),
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(16.dp))
+
+                    // Dropdown lock type
+                    Text("Lock type", style = MaterialTheme.typography.labelSmall)
+                    var dropdownExpanded by remember { mutableStateOf(false) }
+
+                    ExposedDropdownMenuBox(
+                        expanded = dropdownExpanded,
+                        onExpandedChange = { dropdownExpanded = !dropdownExpanded }
+                    ) {
+                        OutlinedTextField(
+                            value = lockDisplayNames[lockType] ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = dropdownExpanded)},
+                            modifier = Modifier
+                                .menuAnchor()
+                                .fillMaxWidth()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = dropdownExpanded,
+                            onDismissRequest = { dropdownExpanded = false }
+                        ) {
+                            lockOption.forEach { selectionOption ->
+                                DropdownMenuItem(
+                                    text = { Text(lockDisplayNames[selectionOption] ?: "") },
+                                    onClick = {
+                                        lockType = selectionOption
+                                        dropdownExpanded = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(24.dp))
+
+                    Button(
+                        onClick = {
+                            onSaveConfig(isTracked, limitMinutes.toInt(), lockType)
+                            isExpanded = false
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary)
+                    ) {
+                        Text("Save Settings")
+                    }
                 }
             }
-        )
+        }
     }
 }
 
 val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "pact_prefs")
 object BlockListManager {
-    private val KEY_BLOCKED_APPS = stringSetPreferencesKey("blocked_apps_set")
+    private fun isTrackedKey(pkg: String) = booleanPreferencesKey("tracked_$pkg")
+    private fun limitKey(pkg: String) = longPreferencesKey("limit_$pkg")
+    private fun usedTimeKey(pkg: String) = longPreferencesKey("used_$pkg")
+    private fun lastDateKey(pkg: String) = stringPreferencesKey("date_$pkg")
+    private fun lockTypeKey(pkg: String) = stringPreferencesKey("lock_$pkg")
 
-    suspend fun setBlockTimer(ctx: Context, packageName: String, durationMinutes: Int) {
-        val endTime = System.currentTimeMillis() + (durationMinutes * 60 * 1000L)
-        val timeKey = longPreferencesKey("endtime_$packageName")
+    private fun getTodayDateString(): String {
+        return SimpleDateFormat("yyyy-MM-dd", Locale.getDefault()).format(Date())
+    }
 
-        // Add endtime based on its package name
-        ctx.dataStore.edit { preferences ->
-            val currentSet = preferences[KEY_BLOCKED_APPS]?.toMutableSet() ?: mutableSetOf()
-            currentSet.add(packageName)
+    suspend fun  saveAppConfig(
+        ctx: Context,
+        packageName: String,
+        isTracked: Boolean,
+        limitMinutes: Int,
+        lockType: String
+    ) {
+        ctx.dataStore.edit { prefs ->
+            prefs[isTrackedKey(packageName)] = isTracked
+            prefs[limitKey(packageName)] = limitMinutes * 60 * 1000L
+            prefs[lockTypeKey(packageName)] = lockType
 
-            preferences[KEY_BLOCKED_APPS] = currentSet
-            preferences[timeKey] = endTime
+            // Write down current date if this is first time
+            if (!prefs.contains(lastDateKey(packageName))) {
+                prefs[lastDateKey(packageName)] = getTodayDateString()
+                prefs[usedTimeKey(packageName)] = 0L
+            }
         }
     }
 
-    suspend fun isCurrentlyBlocked(ctx: Context, packageName: String): Boolean {
-        val preferences = ctx.dataStore.data.first()
-        // Check if exist in Blocked Set
-        if (preferences[KEY_BLOCKED_APPS]?.contains(packageName) != true) {
-            return false
+    suspend fun getAppQuotaInfo(ctx: Context, baseAppInfo: AppInfo): AppInfo {
+        val prefs = ctx.dataStore.data.first()
+        val pkg = baseAppInfo.packageName
+
+        val lastDate = prefs[lastDateKey(pkg)] ?: ""
+        val today = getTodayDateString()
+
+        val usedTimeMillis = if (lastDate == today) {
+            prefs[usedTimeKey(pkg)] ?: 0L
+        } else {
+            0L
         }
 
-        val timeKey = longPreferencesKey("endtime_$packageName")
-        val endTime = preferences[timeKey] ?: 0L
-        val isStillBlocked = System.currentTimeMillis() < endTime
-
-        if (!isStillBlocked && endTime > 0L) {
-            unblockApp(ctx, packageName)
-        }
-
-        return  isStillBlocked
+        return baseAppInfo.copy(
+            isTracked = prefs[isTrackedKey(pkg)] ?: false,
+            dailyLimitMillis = prefs[limitKey(pkg)] ?: 0L,
+            usedTimeMillis = usedTimeMillis,
+            lockType = prefs[lockTypeKey(pkg)] ?: "STANDARD"
+        )
     }
 
-    suspend fun unblockApp(ctx: Context, packageName: String) {
-        val timeKey = longPreferencesKey("endtime_$packageName")
 
-        ctx.dataStore.edit { preferences ->
-            val currentSet = preferences[KEY_BLOCKED_APPS]?.toMutableSet() ?: mutableSetOf()
-            currentSet.remove(packageName)
-            preferences[KEY_BLOCKED_APPS] = currentSet
-            preferences.remove(timeKey)
+    suspend fun addUsedTime(ctx: Context, packageName: String, timeAddedMillis: Long) {
+        ctx.dataStore.edit { prefs ->
+            val lastDate = prefs[lastDateKey(packageName)] ?: ""
+            val today = getTodayDateString()
+
+            val currentUsed = if (lastDate == today) {
+                prefs[usedTimeKey(packageName)] ?: 0L
+            } else {
+                0L
+            }
+
+            prefs[usedTimeKey(packageName)] = currentUsed + timeAddedMillis
+            prefs[lastDateKey(packageName)] = today
         }
     }
 }
