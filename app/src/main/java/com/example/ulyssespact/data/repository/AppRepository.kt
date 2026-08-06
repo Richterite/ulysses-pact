@@ -5,11 +5,13 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import androidx.datastore.core.DataStore
+import androidx.datastore.preferences.core.Preferences
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import com.example.ulyssespact.dataStore
+import androidx.datastore.preferences.preferencesDataStore
 import com.example.ulyssespact.model.AppInfo
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.map
@@ -17,6 +19,8 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
+
+val Context.dataStore: DataStore<Preferences> by preferencesDataStore(name = "pact_prefs")
 class AppRepository(private val ctx: Context) {
     private fun isTrackedKey(pkg: String) = booleanPreferencesKey("tracked_$pkg")
     private fun limitKey(pkg: String) = longPreferencesKey("limit_$pkg")
