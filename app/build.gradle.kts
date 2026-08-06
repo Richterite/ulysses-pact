@@ -51,6 +51,8 @@ dependencies {
 
     val composeBom = platform("androidx.compose:compose-bom:2024.02.00")
     val lifecycleVersion = "2.11.0"
+    val navVersion = "2.9.8"
+
 
     implementation(composeBom)
 
@@ -67,4 +69,7 @@ dependencies {
     // lifecycle
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:${lifecycleVersion}")
     implementation("androidx.lifecycle:lifecycle-runtime-compose:${lifecycleVersion}")
+
+    // Jetpack Compose Navigation
+    implementation("androidx.navigation:navigation-compose:${navVersion}")
 }
